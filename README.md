@@ -152,7 +152,7 @@ If you're using only one `Redis` client, with only one redis instance which has 
 
 ```ts
 import {createClient} from "redis";
-import { Redlock } from "@sesamecare-oss/redlock";
+import { Redlock } from "@snarlbyte/redlock";
 
 const redis = createClient({socket:{ host: "a.redis.example.com" }});
 
