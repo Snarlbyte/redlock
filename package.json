@@ -1,6 +1,6 @@
 {
   "name": "@snarlbyte/redlock",
-  "version": "3.7.4",
+  "version": "3.8.0",
   "description": "A modern node.js redlock implementation for distributed redis locks, updated for node-redis",
   "main": "build/index.js",
   "types": "build/index.d.ts",
