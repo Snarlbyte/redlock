@@ -1,14 +1,15 @@
-import { Redis } from 'ioredis';
+import {createClient, RedisClientType} from 'redis';
 import { beforeAll, describe, expect, test, vi } from 'vitest';
 
-import { Redlock, Lock, ExecutionError, Settings } from './index';
+import {Redlock, Lock, ExecutionError, Settings, AugmentedClient} from './index';
+import {ensureCommands} from "./scripts";
 
 // Mock all resources from ioredis
-vi.mock('ioredis');
+vi.mock('redis');
 
 describe('Redlock Settings', () => {
   test('Default settings are applied if none are provided', () => {
-    const client = new Redis();
+    const client = createClient();
     const redlock = new Redlock([client]);
     const defaultSettings: Readonly<Settings> = {
       driftFactor: 0.01,
@@ -31,14 +32,14 @@ describe('Redlock Settings', () => {
   test.each([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])(
     'Valid Redis DB setting (%i) is accepted',
     (db: number) => {
-      const client = new Redis();
+      const client = createClient();
       const redlock = new Redlock([client], { db });
       expect(redlock.settings.db).toBe(db);
     },
   );
 
   test('Redis DB setting defaults to 0 when not provided', () => {
-    const client = new Redis();
+    const client = createClient();
     const redlock = new Redlock([client]);
     expect(redlock.settings.db).toBe(0);
   });
@@ -46,7 +47,7 @@ describe('Redlock Settings', () => {
   test.each([-1, 16, 0.5, 3.1514])(
     'Redis DB defaults to 0 when value (%s) is outside of acceptable range (0-15)',
     (db: number) => {
-      const client = new Redis();
+      const client = createClient();
       const redlock = new Redlock([client], { db });
       expect(redlock.settings.db).toBe(0);
     },
@@ -54,7 +55,7 @@ describe('Redlock Settings', () => {
 });
 
 describe('Redlock', () => {
-  let redisClient: Redis;
+  let redisClient: AugmentedClient;
   let redlock: Redlock;
   const defaultSettings: Partial<Settings> = {
     driftFactor: 0.01,
@@ -64,9 +65,14 @@ describe('Redlock', () => {
     automaticExtensionThreshold: 500,
   };
 
-  beforeAll(() => {
-    redisClient = new Redis();
-    redlock = new Redlock([redisClient], defaultSettings);
+  beforeAll(async () => {
+    const client = await ensureCommands(createClient());
+    if(client) {
+      redisClient = client
+      redlock = new Redlock([client], defaultSettings);
+    } else {
+      throw new Error("Failed to set custom commands to redis client!")
+    }
   });
 
   describe('acquire()', () => {
