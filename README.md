@@ -1,13 +1,13 @@
-[![Node build, test and publish](https://github.com/sesamecare/redlock/actions/workflows/nodejs.yml/badge.svg)](https://github.com/sesamecare/redlock/actions/workflows/nodejs.yml)
-[![Current Version](https://badgen.net/npm/v/@sesamecare-oss/redlock)](https://npm.im/@sesamecare-oss/redlock)
-[![Supported Node.js Versions](https://badgen.net/npm/node/@sesamecare-oss/redlock)](https://npm.im/@sesamecare-oss/redlock)
+[![Node build, test and publish](https://github.com/snarlbyte/redlock/actions/workflows/nodejs.yml/badge.svg)](https://github.com/snarlbyte/redlock/actions/workflows/nodejs.yml)
+[![Current Version](https://badgen.net/npm/v/@snarlbyte/redlock)](https://npm.im/@snarlbyte/redlock)
+[![Supported Node.js Versions](https://badgen.net/npm/node/@snarlbyte/redlock)](https://npm.im/@snarlbyte/redlock)
 
 # Redlock
 
 This is a Node.js implementation of the [redlock](http://redis.io/topics/distlock) algorithm for distributed redis locks. It provides strong guarantees in both single-redis and multi-redis environments, and provides fault tolerance through use of multiple independent redis instances or clusters.
 
 > Note!
-> This is a derivative of node-redlock, rewritten in Typescript with ioredis@5.
+> This is a derivative of node-redlock, rewritten in Typescript with redis@5.5.
 
 - [Installation](#installation)
 - [Usage](#usage)
@@ -18,22 +18,22 @@ This is a Node.js implementation of the [redlock](http://redis.io/topics/distloc
 ## Installation
 
 ```bash
-npm install --save @sesamecare-oss/redlock
+npm install --save @snarlbyte/redlock
 ```
 
 ## Configuration
 
-Redlock is designed to use [ioredis](https://github.com/luin/ioredis) to keep its client connections and handle the cluster protocols.
+Redlock is designed to use [redis](https://github.com/redis/node-redis) to keep its client connections and handle the cluster protocols.
 
 A redlock object is instantiated with an array of at least one redis client and an optional `options` object. Properties of the Redlock object should NOT be changed after it is first used, as doing so could have unintended consequences for live locks.
 
 ```ts
-import Redis from "ioredis";
-import { Redlock } from "@sesamecare-oss/redlock";
+import {createClient} from "redis";
+import { Redlock } from "@snarlbyte/redlock";
 
-const redisA = new Redis({ host: "a.redis.example.com" });
-const redisB = new Redis({ host: "b.redis.example.com" });
-const redisC = new Redis({ host: "c.redis.example.com" });
+const redisA = createClient({socket:{host: "a.redis.example.com"}});
+const redisB = createClient({socket:{host: "b.redis.example.com"}});
+const redisC = createClient({socket:{host: "c.redis.example.com"}});
 
 const redlock = new Redlock(
   // You should have one client for each independent redis node
@@ -111,7 +111,7 @@ Beginning in version 5, this package is published primarily as an ECMAScript mod
 The `Redlock` class is published as the "default" export, and can be imported with:
 
 ```ts
-const { Redlock } = require("@sesamecare-oss/redlock");
+const { Redlock } = require("@snarlbyte/redlock");
 ```
 
 In version 6, this package will stop distributing the CommonJS version.
@@ -151,10 +151,10 @@ Please see [`CONTRIBUTING.md`](./CONTRIBUTING.md) for information on developing,
 If you're using only one `Redis` client, with only one redis instance which has cluster mode **disabled**, you can set a `db` property in the `options` configuration to specify the DB index in which to store the lock records. For example:
 
 ```ts
-import Redis from "ioredis";
+import {createClient} from "redis";
 import { Redlock } from "@sesamecare-oss/redlock";
 
-const redis = new Redis({ host: "a.redis.example.com" });
+const redis = createClient({socket:{ host: "a.redis.example.com" }});
 
 const redlock = new Redlock(
   [redis],
@@ -180,7 +180,7 @@ Note that the `db` value is ignored for redis servers with cluster mode enabled.
 
 ### Using Cluster/Sentinel
 
-**_Please make sure to use a client with built-in cluster support, such as [ioredis](https://github.com/luin/ioredis)._**
+**_Please make sure to use a client with built-in cluster support, such as [redis](https://github.com/redis/node-redis)._**
 
 It is completely possible to use a _single_ redis cluster or sentinal configuration by passing one preconfigured client to redlock. While you do gain high availability and vastly increased throughput under this scheme, the failure modes are a bit different, and it becomes theoretically possible that a lock is acquired twice:
 
