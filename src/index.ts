@@ -1,20 +1,24 @@
 import { randomBytes, createHash } from 'crypto';
 import { EventEmitter } from 'events';
 
-import type { Redis as IORedisClient, Cluster as IORedisCluster } from 'ioredis';
+import type {RedisArgument, RedisClientType} from 'redis'
 
 import { ensureCommands } from './scripts';
 
-type Client = IORedisClient | IORedisCluster;
+export type AugmentedClient = RedisClientType & {
+  acquireLock(keys: RedisArgument[], ...args: (string)[]): Promise<number>;
+  extendLock(keys: RedisArgument[], ...args: (string)[]): Promise<number>;
+  releaseLock(keys: RedisArgument[], ...args: (string)[]): Promise<number>;
+}
 
 export type ClientExecutionResult =
   | {
-      client: Client;
+      client: RedisClientType;
       vote: 'for';
       value: number;
     }
   | {
-      client: Client;
+      client: RedisClientType;
       vote: 'against';
       error: Error;
     };
@@ -25,8 +29,8 @@ export type ClientExecutionResult =
 export type ExecutionStats = {
   readonly membershipSize: number;
   readonly quorumSize: number;
-  readonly votesFor: Set<Client>;
-  readonly votesAgainst: Map<Client, Error>;
+  readonly votesFor: Set<RedisClientType>;
+  readonly votesAgainst: Map<RedisClientType, Error>;
 };
 
 /*
@@ -128,10 +132,10 @@ export interface RedlockUsingContext {
  * consequences for live locks.
  */
 export class Redlock extends EventEmitter {
-  public readonly clients: Set<Client>;
+  public readonly clients: Set<RedisClientType>;
   public readonly settings: Required<Settings>;
 
-  public constructor(clients: Iterable<Client>, settings: Settings = {}) {
+  public constructor(clients: Iterable<RedisClientType>, settings: Settings = {}) {
     super();
 
     // Prevent crashes on error events.
@@ -224,7 +228,7 @@ export class Redlock extends EventEmitter {
       const { attempts, start } = await this._execute(
         'acquireLock',
         resources,
-        [this.settings.db, value, duration],
+        [this.settings.db.toString(), value, duration.toString()],
         settings,
       );
 
@@ -236,7 +240,7 @@ export class Redlock extends EventEmitter {
     } catch (error) {
       // If there was an error acquiring the lock, release any partial lock
       // state that may exist on a minority of clients.
-      await this._execute('releaseLock', resources, [this.settings.db, value], {
+      await this._execute('releaseLock', resources, [this.settings.db.toString(), value], {
         retryCount: 0,
       }).catch(() => {
         // Any error here will be ignored.
@@ -258,7 +262,7 @@ export class Redlock extends EventEmitter {
     lock.expiration = 0;
 
     // Attempt to release the lock.
-    return this._execute('releaseLock', lock.resources, [this.settings.db, lock.value], settings);
+    return this._execute('releaseLock', lock.resources, [this.settings.db.toString(), lock.value], settings);
   }
 
   /**
@@ -281,7 +285,7 @@ export class Redlock extends EventEmitter {
     const { attempts, start } = await this._execute(
       'extendLock',
       existing.resources,
-      [this.settings.db, existing.value, duration],
+      [this.settings.db.toString(), existing.value, duration.toString()],
       settings,
     );
 
@@ -303,7 +307,7 @@ export class Redlock extends EventEmitter {
   private async _execute(
     command: 'acquireLock' | 'extendLock' | 'releaseLock',
     keys: string[],
-    args: (string | number)[],
+    args: string[],
     _settings?: Partial<Settings>,
   ): Promise<ExecutionResult> {
     const settings = _settings
@@ -353,7 +357,7 @@ export class Redlock extends EventEmitter {
   private async _attemptOperation(
     script: 'acquireLock' | 'extendLock' | 'releaseLock',
     keys: string[],
-    args: (string | number)[],
+    args: string[],
   ): Promise<
     | { vote: 'for'; stats: Promise<ExecutionStats>; start: number }
     | { vote: 'against'; stats: Promise<ExecutionStats>; start: number }
@@ -369,8 +373,8 @@ export class Redlock extends EventEmitter {
       const stats: ExecutionStats = {
         membershipSize: clientResults.length,
         quorumSize: Math.floor(clientResults.length / 2) + 1,
-        votesFor: new Set<Client>(),
-        votesAgainst: new Map<Client, Error>(),
+        votesFor: new Set<RedisClientType>(),
+        votesAgainst: new Map<RedisClientType, Error>(),
       };
 
       let done: () => void;
@@ -425,14 +429,17 @@ export class Redlock extends EventEmitter {
   }
 
   private async _attemptOperationOnClient(
-    client: Client,
+    client: RedisClientType,
     script: 'acquireLock' | 'extendLock' | 'releaseLock',
     keys: string[],
-    args: (string | number)[],
+    args: string[],
   ): Promise<ClientExecutionResult> {
     try {
-      ensureCommands(client);
-      const shaResult = await client[script](keys.length, ...keys, ...args);
+      const augmentedClient = await ensureCommands(client);
+      if(!augmentedClient){
+        throw new Error('Client does not support LUA scripts.');
+      }
+      const shaResult = await augmentedClient[script](keys, ...args);
       // Attempt to evaluate the script by its hash.
 
       if (typeof shaResult !== 'number') {
@@ -460,6 +467,7 @@ export class Redlock extends EventEmitter {
 
       // Emit the error on the redlock instance for observability.
       this.emit('error', error);
+      console.log('Redlock error: ' + error);
 
       return {
         vote: 'against',

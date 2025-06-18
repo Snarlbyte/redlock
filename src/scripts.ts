@@ -1,5 +1,6 @@
-import { Redis as IORedisClient, Cluster as IORedisCluster, Result } from 'ioredis';
-type Client = IORedisClient | IORedisCluster;
+import {RedisArgument, RedisClientType as IORedisClient} from 'redis';
+
+import {AugmentedClient} from './index';
 
 // Define script constants.
 const DB_SELECT_SCRIPT = `
@@ -61,25 +62,109 @@ const RELEASE_SCRIPT = `
   return count
 `;
 
-declare module 'ioredis' {
-  interface RedisCommander<Context> {
-    acquireLock(keys: number, ...args: (string | number)[]): Result<string, Context>;
-    extendLock(keys: number, ...args: (string | number)[]): Result<string, Context>;
-    releaseLock(keys: number, ...args: (string | number)[]): Result<string, Context>;
+declare module 'redis' {
+  interface RedisCommander {
+    acquireLock(keys: number, ...args: (string | number)[]): Promise<number>;
+    extendLock(keys: number, ...args: (string | number)[]): Promise<number>;
+    releaseLock(keys: number, ...args: (string | number)[]): Promise<number>;
   }
 }
 
-export function ensureCommands(client: Client) {
-  if (typeof client.acquireLock === 'function') {
-    return;
+let acquireScriptSha: string;
+let extendScriptSha: string;
+let releaseScriptSha: string;
+
+export async function ensureCommands(client: IORedisClient): Promise<AugmentedClient | null> {
+  const augmentedClient = client as AugmentedClient;
+
+  // Check if commands are already loaded
+  if (typeof augmentedClient.acquireLock === 'function') {
+    return augmentedClient;
   }
-  client.defineCommand('acquireLock', {
-    lua: ACQUIRE_SCRIPT,
-  });
-  client.defineCommand('extendLock', {
-    lua: EXTEND_SCRIPT,
-  });
-  client.defineCommand('releaseLock', {
-    lua: RELEASE_SCRIPT,
-  });
+
+  try {
+    // Test client connection first
+    await client.ping();
+
+    // Load scripts if not already loaded
+    if (!acquireScriptSha) {
+      acquireScriptSha = await client.scriptLoad(ACQUIRE_SCRIPT);
+    }
+    if (!extendScriptSha) {
+      extendScriptSha = await client.scriptLoad(EXTEND_SCRIPT);
+    }
+    if (!releaseScriptSha) {
+      releaseScriptSha = await client.scriptLoad(RELEASE_SCRIPT);
+    }
+
+    // Add the custom methods to the client
+    augmentedClient.acquireLock = async function(keys: RedisArgument[], ...args: (string)[]): Promise<number> {
+      try {
+        const result = await client.evalSha(acquireScriptSha, { keys, arguments: args });
+        if (typeof result !== 'number') {
+          throw new Error(`Expected number result from acquireLock script, got ${typeof result}`);
+        }
+        return result;
+      } catch (error) {
+        // If script not found, reload and retry
+        if (error && typeof error === 'object' && 'message' in error &&
+          (error as any).message.includes('NOSCRIPT')) {
+          acquireScriptSha = await client.scriptLoad(ACQUIRE_SCRIPT);
+          const result = await client.evalSha(acquireScriptSha, { keys, arguments: args });
+          if (typeof result !== 'number') {
+            throw new Error(`Expected number result from acquireLock script, got ${typeof result}`);
+          }
+          return result;
+        }
+        throw error;
+      }
+    };
+
+    augmentedClient.extendLock = async function(keys: RedisArgument[], ...args: (string)[]): Promise<number> {
+      try {
+        const result = await client.evalSha(extendScriptSha, { keys, arguments: args });
+        if (typeof result !== 'number') {
+          throw new Error(`Expected number result from extendLock script, got ${typeof result}`);
+        }
+        return result;
+      } catch (error) {
+        if (error && typeof error === 'object' && 'message' in error &&
+          (error as any).message.includes('NOSCRIPT')) {
+          extendScriptSha = await client.scriptLoad(EXTEND_SCRIPT);
+          const result = await client.evalSha(extendScriptSha, { keys, arguments: args });
+          if (typeof result !== 'number') {
+            throw new Error(`Expected number result from extendLock script, got ${typeof result}`);
+          }
+          return result;
+        }
+        throw error;
+      }
+    };
+
+    augmentedClient.releaseLock = async function(keys: RedisArgument[], ...args: (string)[]): Promise<number> {
+      try {
+        const result = await client.evalSha(releaseScriptSha, { keys, arguments: args });
+        if (typeof result !== 'number') {
+          throw new Error(`Expected number result from releaseLock script, got ${typeof result}`);
+        }
+        return result;
+      } catch (error) {
+        if (error && typeof error === 'object' && 'message' in error &&
+          (error as any).message.includes('NOSCRIPT')) {
+          releaseScriptSha = await client.scriptLoad(RELEASE_SCRIPT);
+          const result = await client.evalSha(releaseScriptSha, { keys, arguments: args });
+          if (typeof result !== 'number') {
+            throw new Error(`Expected number result from releaseLock script, got ${typeof result}`);
+          }
+          return result;
+        }
+        throw error;
+      }
+    };
+
+    return augmentedClient;
+  } catch (error) {
+    console.error('Failed to ensure commands on Redis client:', error);
+    return null;
+  }
 }
